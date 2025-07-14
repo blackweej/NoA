@@ -592,19 +592,6 @@ class DualMoEPipeline:
         seqlens = [len(tokens)]
         
         return torch.tensor(tokens, dtype=torch.long), seqlens
-    
-    def submit_survey(self, relevance_scores: List[int], user_id: Optional[str] = None) -> Dict[int, float]:
-        """설문 제출 및 fusion_degree 업데이트"""
-        if not hasattr(self, '_last_query'):
-            raise ValueError("No recent query to evaluate")
-        
-        survey_response = self.survey_system.collect_survey_response(
-            self._last_query, relevance_scores, user_id
-        )
-        
-        updated_degrees = self.survey_system.update_fusion_degrees([survey_response])
-        
-        return updated_degrees
 
 
 # 사용 예시
