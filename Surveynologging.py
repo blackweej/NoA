@@ -19,7 +19,6 @@ import logging
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
-
 @dataclass
 class SurveyResponse:
     """설문 응답 데이터 클래스"""
@@ -124,7 +123,6 @@ class SurveySystem:
         if auto_mode:
             # 자동 모드: 랜덤 점수 생성 (테스트용)
             survey_response.relevance_scores = self._generate_auto_scores(outputs)
-            logger.debug(f"Auto-generated scores: {survey_response.relevance_scores}")
         else:
             # 실제 사용자 인터페이스 표시
             relevance_scores = self._display_survey_interface(survey_response)
@@ -152,12 +150,12 @@ class SurveySystem:
         Returns:
             List[int]: 5개의 연관성 점수 (1-5)
         """
-        print("\n" + "="*80) # Replaced with logger.info for consistency with other parts of the system.
-        logger.info("📋 SURVEY: 응답 품질 평가")
-        logger.info("="*80)
+        print("\n" + "="*80)
+        print("📋 SURVEY: 응답 품질 평가")
+        print("="*80)
         
-        logger.info(f"\n💭 원본 질문: {survey_response.question}")
-        logger.info("\n" + "-"*50)
+        print(f"\n💭 원본 질문: {survey_response.question}")
+        print("\n" + "-"*50)
         
         # 3가지 출력 표시
         outputs = [
@@ -167,12 +165,12 @@ class SurveySystem:
         ]
         
         for i, (title, text) in enumerate(outputs, 1):
-            logger.info(f"\n{i}. {title}:")
-            logger.info(f"   {text[:200]}..." if len(text) > 200 else f"   {text}")
+            print(f"\n{i}. {title}:")
+            print(f"   {text[:200]}..." if len(text) > 200 else f"   {text}")
         
-        logger.info("\n" + "-"*50)
-        logger.info("📊 다음 각 항목에 대해 1-5점으로 평가해주세요:")
-        logger.info("   (1=매우 낮음, 2=낮음, 3=보통, 4=높음, 5=매우 높음)")
+        print("\n" + "-"*50)
+        print("📊 다음 각 항목에 대해 1-5점으로 평가해주세요:")
+        print("   (1=매우 낮음, 2=낮음, 3=보통, 4=높음, 5=매우 높음)")
         
         questions = [
             "질문과의 연관성",
@@ -191,12 +189,12 @@ class SurveySystem:
                         scores.append(score)
                         break
                     else:
-                        logger.warning("   ❌ 1-5 사이의 숫자를 입력해주세요.") # Replaced print with logger.warning
+                        print("   ❌ 1-5 사이의 숫자를 입력해주세요.")
                 except ValueError:
-                    logger.warning("   ❌ 숫자를 입력해주세요.") # Replaced print with logger.warning
+                    print("   ❌ 숫자를 입력해주세요.")
         
-        logger.info(f"\n✅ 평가 완료! 점수: {scores}")
-        logger.info("="*80)
+        print(f"\n✅ 평가 완료! 점수: {scores}")
+        print("="*80)
         
         return scores
 
@@ -233,7 +231,6 @@ class SurveySystem:
             score = base_score + bonus + random.randint(-1, 1)
             scores.append(max(1, min(5, score)))
         
-        logger.debug(f"Generated auto scores: {scores}")
         return scores
 
     def _update_fusion_degrees_from_response(self, survey_response: SurveyResponse):
@@ -249,8 +246,7 @@ class SurveySystem:
         
         # 평균 점수 계산
         avg_relevance = sum(survey_response.relevance_scores) / len(survey_response.relevance_scores)
-        logger.debug(f"Calculated average relevance score: {avg_relevance:.2f}")
-
+        
         # 모든 active expert에 대해 업데이트
         for expert_id in self.fusion_controller.fusion_degrees:  # 기본 8개 expert 가정
             # 현재 fusion_degree 가져오기
@@ -265,7 +261,6 @@ class SurveySystem:
             # 업데이트 (FusionController가 있을 경우)
             if hasattr(self.fusion_controller, 'fusion_degrees'):
                 self.fusion_controller.fusion_degrees[expert_id] = new_degree
-                logger.debug(f"Expert {expert_id}: Current degree={current_degree:.4f}, Adjustment={adjustment_rate:.4f}, New degree={new_degree:.4f}")
             
             # 메트릭 업데이트
             self._update_feedback_metrics(expert_id, avg_relevance)
@@ -286,8 +281,7 @@ class SurveySystem:
         
         # Expert별 피드백 집계
         expert_feedback = self._aggregate_feedback_by_expert(survey_responses)
-        logger.debug(f"Aggregated feedback for {len(expert_feedback)} experts.")
-
+        
         updated_metrics = []
         for expert_id, feedback_data in expert_feedback.items():
             # 평균 연관성 점수 계산
@@ -305,7 +299,6 @@ class SurveySystem:
             # 업데이트
             if hasattr(self.fusion_controller, 'fusion_degrees'):
                 self.fusion_controller.fusion_degrees[expert_id] = new_degree
-                logger.debug(f"Batch update for Expert {expert_id}: Current degree={current_degree:.4f}, Adjustment={adjustment_rate:.4f}, New degree={new_degree:.4f}")
             
             # 메트릭 생성
             metrics = FeedbackMetrics(
@@ -347,7 +340,7 @@ class SurveySystem:
                 
                 expert_feedback[expert_id]['scores'].append(avg_score)
                 expert_feedback[expert_id]['timestamps'].append(response.timestamp)
-        logger.debug(f"Aggregated feedback for {len(expert_feedback)} experts from {len(survey_responses)} survey responses.")
+        
         return expert_feedback
 
     def _analyze_trend(self, scores: List[float]) -> str:
@@ -361,14 +354,12 @@ class SurveySystem:
             str: 'positive', 'negative', 'neutral'
         """
         if len(scores) < 2:
-            logger.debug("Insufficient scores to analyze trend, returning 'neutral'.")
             return 'neutral'
         
         # 최근 5개 점수 기준으로 트렌드 분석
         recent_scores = scores[-5:]
         
         if len(recent_scores) < 2:
-            logger.debug("Less than 2 recent scores, returning 'neutral'.")
             return 'neutral'
         
         # 선형 회귀를 통한 트렌드 계산
@@ -377,7 +368,6 @@ class SurveySystem:
         
         if len(x) > 1:
             slope = np.polyfit(x, y, 1)[0]
-            logger.debug(f"Trend analysis: recent scores {recent_scores}, slope {slope:.4f}")
             
             if slope > 0.1:
                 return 'positive'
@@ -417,7 +407,6 @@ class SurveySystem:
         else:
             adjustment_rate = max(adjustment_rate, self.adjustment_rates['negative'])
         
-        logger.debug(f"Calculated adjustment rate: Avg Relevance={avg_relevance:.2f}, Trend={trend}, Rate={adjustment_rate:.4f}")
         return adjustment_rate
 
     def _apply_adjustment(self, current_degree: float, adjustment_rate: float) -> float:
@@ -435,7 +424,6 @@ class SurveySystem:
         
         # 범위 제한
         new_degree = max(0.0, min(1.0, new_degree))
-        logger.debug(f"Applied adjustment: Current={current_degree:.4f}, Adjustment={adjustment_rate:.4f}, New={new_degree:.4f}")
         
         return new_degree
 
@@ -450,7 +438,6 @@ class SurveySystem:
             float: 신뢰도 점수 (0-1)
         """
         if len(scores) < 2:
-            logger.debug("Insufficient scores to calculate confidence, returning 0.5.")
             return 0.5
         
         # 분산 기반 신뢰도 계산 (분산이 낮을수록 신뢰도 높음)
@@ -458,9 +445,7 @@ class SurveySystem:
         max_variance = 4.0  # 1-5 점수에서 최대 분산
         
         confidence = 1.0 - (variance / max_variance)
-        confidence = max(0.0, min(1.0, confidence))
-        logger.debug(f"Calculated confidence score: Variance={variance:.4f}, Confidence={confidence:.4f}")
-        return confidence
+        return max(0.0, min(1.0, confidence))
 
     def _update_feedback_metrics(self, expert_id: int, avg_relevance: float):
         """
@@ -479,14 +464,12 @@ class SurveySystem:
                 last_updated=datetime.now().isoformat(),
                 confidence_score=0.5
             )
-            logger.debug(f"Initialized feedback metrics for expert {expert_id} with avg relevance {avg_relevance:.2f}.")
         else:
             metrics = self.feedback_metrics[expert_id]
             # 이동 평균 업데이트
             metrics.avg_relevance = (metrics.avg_relevance * metrics.feedback_count + avg_relevance) / (metrics.feedback_count + 1)
             metrics.feedback_count += 1
             metrics.last_updated = datetime.now().isoformat()
-            logger.debug(f"Updated feedback metrics for expert {expert_id}: Avg relevance={metrics.avg_relevance:.2f}, Count={metrics.feedback_count}.")
 
     def _save_survey_data(self):
         """설문 데이터 저장"""
@@ -498,7 +481,7 @@ class SurveySystem:
             }
             
             with open(self.survey_storage_path, 'w', encoding='utf-8') as f:
-                json.dump(data, f, indent=2)
+                json.dump(data, f, ensure_ascii=False, indent=2)
             
             logger.info(f"Survey data saved to {self.survey_storage_path}")
         except Exception as e:
@@ -533,7 +516,6 @@ class SurveySystem:
     def get_survey_statistics(self) -> Dict:
         """설문 통계 반환"""
         if not self.survey_responses:
-            logger.debug("No survey responses available, returning default statistics.")
             return {'total_responses': 0, 'average_score': 0.0, 'expert_metrics': {}}
         
         total_responses = len(self.survey_responses)
@@ -544,19 +526,16 @@ class SurveySystem:
         
         average_score = sum(all_scores) / len(all_scores) if all_scores else 0.0
         
-        stats = {
+        return {
             'total_responses': total_responses,
             'average_score': average_score,
             'expert_metrics': {k: asdict(v) for k, v in self.feedback_metrics.items()},
             'recent_trends': self._get_recent_trends()
         }
-        logger.debug(f"Retrieved survey statistics: {stats}")
-        return stats
 
     def _get_recent_trends(self) -> Dict:
         """최근 트렌드 분석"""
         if len(self.survey_responses) < 5:
-            logger.debug("Insufficient survey responses for recent trend analysis.")
             return {'trend': 'insufficient_data', 'confidence': 0.0}
         
         recent_responses = self.survey_responses[-10:]  # 최근 10개 응답
@@ -569,14 +548,12 @@ class SurveySystem:
         trend = self._analyze_trend(recent_scores)
         confidence = self._calculate_confidence_score(recent_scores)
         
-        trends_data = {
+        return {
             'trend': trend,
             'confidence': confidence,
             'recent_average': sum(recent_scores) / len(recent_scores),
             'score_variance': np.var(recent_scores)
         }
-        logger.debug(f"Recent trends data: {trends_data}")
-        return trends_data
 
     def export_survey_data(self, export_path: str = None) -> str:
         """설문 데이터 내보내기"""
@@ -599,7 +576,7 @@ class SurveySystem:
         }
         
         with open(export_path, 'w', encoding='utf-8') as f:
-            json.dump(export_data, f, indent=2)
+            json.dump(export_data, f, ensure_ascii=False, indent=2)
         
         logger.info(f"Survey data exported to {export_path}")
         return export_path
@@ -609,11 +586,7 @@ if __name__ == "__main__":
     # 테스트용 간단한 FusionController 모킹
     class MockFusionController:
         def __init__(self):
-            # 이 MockFusionController는 실제 FusionController의 fusion_degrees 딕셔너리를 모킹
-            # 실제 사용 시 FusionController 인스턴스를 전달해야 합니다.
-            # 여기서는 단순히 expert_id 0부터 7까지를 가정합니다.
-            self.fusion_degrees = {i: 1.0 for i in range(8)} 
-            logger.info("MockFusionController initialized for testing.")
+            self.fusion_degrees = {i: 1.0 for i in self.fusion_controller.fusion_degrees}
     
     # 시스템 초기화
     fusion_controller = MockFusionController()
@@ -626,7 +599,7 @@ if __name__ == "__main__":
         'fused': "이것은 융합된 최종 출력입니다. 두 출력의 장점을 결합하여 최적의 답변을 제공합니다."
     }
     
-    logger.info("🔧 Survey System 테스트 시작") # Replaced print with logger.info
+    print("🔧 Survey System 테스트 시작")
     
     # 자동 모드로 설문 응답 수집
     response = survey_system.collect_survey_response(
@@ -636,14 +609,14 @@ if __name__ == "__main__":
         auto_mode=True
     )
     
-    logger.info(f"\n📊 수집된 응답: {response.relevance_scores}") # Replaced print with logger.info
+    print(f"\n📊 수집된 응답: {response.relevance_scores}")
     
     # 통계 확인
     stats = survey_system.get_survey_statistics()
-    logger.info(f"\n📈 현재 통계: {stats}") # Replaced print with logger.info
+    print(f"\n📈 현재 통계: {stats}")
     
     # 데이터 내보내기
     export_path = survey_system.export_survey_data()
-    logger.info(f"\n💾 데이터 내보내기 완료: {export_path}") # Replaced print with logger.info
+    print(f"\n💾 데이터 내보내기 완료: {export_path}")
     
-    logger.info("\n✅ Survey System 테스트 완료") # Replaced print with logger
+    print("\n✅ Survey System 테스트 완료")

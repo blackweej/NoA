@@ -22,13 +22,9 @@ from mistral_common.protocol.instruct.messages import UserMessage
 from mistral_common.protocol.instruct.request import ChatCompletionRequest
 from DualMoEoutput import DualOutputMoE
 
-# Opsætning af grundlæggende logningskonfiguration
-logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(name)s - %(levelname)s - %(message)s')
-
-
 @dataclass
 class ExpertOutput:
-    """Dataklasse, der indeholder ekspertoutputoplysninger"""
+    """Expert 출력 정보를 담는 데이터 클래스"""
     expert_id: int
     output_tensor: torch.Tensor
     weight: float
@@ -38,7 +34,7 @@ class ExpertOutput:
 
 @dataclass
 class AssistantOutput:
-    """Dataklasse, der indeholder assistentoutputoplysninger"""
+    """Assistant 출력 정보를 담는 데이터 클래스"""
     assistant_id: str
     comment_text: str
     confidence_score: float
@@ -48,7 +44,7 @@ class AssistantOutput:
 
 @dataclass
 class FusionMetrics:
-    """Dataklasse, der indeholder fusionsberegningsresultater"""
+    """Fusion 계산 결과를 담는 데이터 클래스"""
     expert_id: int
     similarity_score: float
     novelty_score: float
@@ -58,36 +54,32 @@ class FusionMetrics:
 
 @dataclass
 class SurveyResponse:
-    """Dataklasse for undersøgelsessvar"""
+    """설문 응답 데이터 클래스"""
     question: str
-    relevance_scores: List[int]  # 1-5 point
+    relevance_scores: List[int]  # 1-5 점수
     timestamp: datetime
     user_id: Optional[str] = None
 
 
 class MaxExpertsList:
-    """Liste over maksimalt aktiverede eksperter"""
+    """최대 활성화된 Expert들의 리스트"""
     def __init__(self, max_count: int = 8):
         self.max_count = max_count
         self.experts: List[ExpertOutput] = []
-        self.threshold = 0.1  # Minimumsaktiveringstærskel
-        self.logger = logging.getLogger(__name__)
+        self.threshold = 0.1  # 최소 활성화 임계값
     
     def add_expert(self, expert_output: ExpertOutput):
         if expert_output.activation_score > self.threshold:
-            self.logger.info(f"Tilføjer ekspert {expert_output.expert_id} med aktiveringsscore {expert_output.activation_score:.4f}")
             self.experts.append(expert_output)
-            # Sorter efter aktiveringsscore og behold kun de øverste max_count
+            # 활성화 점수 기준으로 정렬하고 상위 max_count개만 유지
             self.experts.sort(key=lambda x: x.activation_score, reverse=True)
             self.experts = self.experts[:self.max_count]
-        else:
-            self.logger.warning(f"Ekspert {expert_output.expert_id} med aktiveringsscore {expert_output.activation_score:.4f} under tærsklen på {self.threshold}")
     
     def get_expert_ids(self) -> List[int]:
         return [expert.expert_id for expert in self.experts]
 
 class AssistantRouter:
-    """Assistent system router"""
+    """Assistant 시스템 라우터"""
     
     def __init__(self, tokenizer: MistralTokenizer, model: Transformer, classification_threshold: float = 0.3):
         self.tokenizer = tokenizer
@@ -96,45 +88,41 @@ class AssistantRouter:
         self.logger = logging.getLogger(__name__)
     
     def _cluster_experts_by_activation(self, max_experts: MaxExpertsList) -> Dict[int, List[ExpertOutput]]:
-        """Klyng eksperter efter aktiveringsmønster"""
-        self.logger.info("Klynger eksperter efter aktivering.")
-        # Simpel implementering: grupper baseret på aktiveringsscore
+        """Expert들을 활성화 패턴으로 클러스터링"""
+        # 간단한 구현: 활성화 점수 기준으로 그룹화
         clusters = {}
         
         for i, expert in enumerate(max_experts.experts):
-            cluster_id = i // 2  # Grupper med 2
+            cluster_id = i // 2  # 2개씩 그룹화
             if cluster_id not in clusters:
                 clusters[cluster_id] = []
             clusters[cluster_id].append(expert)
         
-        self.logger.info(f"Oprettet {len(clusters)} ekspertklynger.")
         return clusters
     
     def _generate_prompt_template(self, expert_group: List[ExpertOutput]) -> str:
-        """Generer promptskabelon baseret på ekspertgruppe"""
+        """Expert 그룹 기반 프롬프트 템플릿 생성"""
         expert_ids = [expert.expert_id for expert in expert_group]
-        self.logger.info(f"Genererer promptskabelon for ekspertgruppe: {expert_ids}")
         return f"""
-        Du er en AI-assistent med ekspertise fra Eksperter {expert_ids}.
-        Skriv en kommentar fra et supplerende perspektiv på følgende spørgsmål.
+        당신은 Expert {expert_ids}의 전문성을 가진 AI Assistant입니다.
+        다음 질문에 대해 보완적인 관점에서 코멘트를 작성해주세요.
         
-        Spørgsmål: {{question}}
+        질문: {{question}}
         
-        Giv ny indsigt eller et nyt perspektiv i betragtning af konteksten i det eksisterende svar.
-        Skriv kommentaren kortfattet og klart.
+        기존 답변의 맥락을 고려하여 새로운 통찰이나 관점을 제공해주세요.
+        코멘트는 간결하고 명확하게 작성해주세요.
         """
     
     def _generate_comment(self, prompt: str, assistant_id: str) -> str:
-        """Kald til den faktiske genereringsfunktion"""
-        self.logger.info(f"Genererer kommentar for assistent {assistant_id}.")
+        """실제 Generate 함수 호출"""
         try:
-            # 1. Tokenisering af prompt
+            # 1. 프롬프트 토크나이징
             completion_request = ChatCompletionRequest(
                 messages=[UserMessage(content=prompt)]
             )
             tokens = self.tokenizer.encode_chat_completion(completion_request).tokens
             
-            # 2. Kald til genereringsfunktion
+            # 2. Generate 함수 호출
             out_tokens, _ = generate(
                 [tokens],
                 self.model,
@@ -143,45 +131,43 @@ class AssistantRouter:
                 eos_id=self.tokenizer.instruct_tokenizer.tokenizer.eos_id
             )
             
-            # 3. Dekodning
+            # 3. 디코딩
             comment_text = self.tokenizer.instruct_tokenizer.tokenizer.decode(out_tokens[0])
             
-            # 4. Formatering af kommentar
-            formatted_comment = f"[Assistant_{assistant_id}] Supplerende perspektiv: {comment_text}"
-            self.logger.info(f"Kommentar genereret for assistent {assistant_id}.")
+            # 4. 코멘트 포맷팅
+            formatted_comment = f"[Assistant_{assistant_id}] 보완적 관점: {comment_text}"
+            
             return formatted_comment
             
         except Exception as e:
-            self.logger.error(f"Fejl under generering af kommentar: {e}", exc_info=True)
-            return f"[Assistant_{assistant_id}] Der opstod en fejl under generering af kommentar."
+            self.logger.error(f"Error generating comment: {e}")
+            return f"[Assistant_{assistant_id}] 코멘트 생성 중 오류가 발생했습니다."
     
     def bridge_through_assistants(self, original_question: str, first_output: torch.Tensor, max_experts: MaxExpertsList) -> List[AssistantOutput]:
-        """Assistent systemets hovedbehandlingsfunktion"""
-        self.logger.info(f"Behandler spørgsmål gennem {len(max_experts.experts)} eksperter")
+        """Assistant 시스템 메인 처리 함수"""
+        self.logger.info(f"Processing question through {len(max_experts.experts)} experts")
         
-        # 1. Klyngning af eksperter
+        # 1. Expert 클러스터링
         expert_clusters = self._cluster_experts_by_activation(max_experts)
         
-        # 2. Generering af assistenter og kommentarer for hver klynge
+        # 2. 각 클러스터별 Assistant 생성 및 코멘트 생성
         assistant_outputs = []
         
         for cluster_id, expert_group in expert_clusters.items():
-            # Opsætning af assistent
+            # Assistant 설정
             assistant_id = f"cluster_{cluster_id}"
-            self.logger.info(f"Behandler klynge {cluster_id} for at generere assistentoutput.")
             prompt_template = self._generate_prompt_template(expert_group)
             
-            # Sammensætning af prompt
+            # 프롬프트 구성
             prompt = prompt_template.format(question=original_question)
             
-            # Generering af kommentar
+            # 코멘트 생성
             comment_text = self._generate_comment(prompt, assistant_id)
             
-            # Beregning af tillidsscore (gennemsnit af aktiveringsscorer)
+            # 신뢰도 점수 계산 (활성화 점수 평균)
             confidence_score = sum(expert.activation_score for expert in expert_group) / len(expert_group)
-            self.logger.info(f"Beregnet tillidsscore for assistent {assistant_id}: {confidence_score:.4f}")
             
-            # Liste over relaterede eksperter
+            # 관련 Expert 리스트
             related_experts = [expert.expert_id for expert in expert_group 
                              if expert.activation_score > self.classification_threshold]
             
@@ -194,12 +180,12 @@ class AssistantRouter:
             
             assistant_outputs.append(assistant_output)
         
-        self.logger.info(f"Genereret {len(assistant_outputs)} assistentkommentarer")
+        self.logger.info(f"Generated {len(assistant_outputs)} assistant comments")
         return assistant_outputs
 
 
 class EmbeddingProcessor:
-    """Indlejringsbehandlingssystem"""
+    """임베딩 처리 시스템"""
     
     def __init__(self, model: Transformer, tokenizer: MistralTokenizer):
         self.model = model
@@ -207,46 +193,40 @@ class EmbeddingProcessor:
         self.logger = logging.getLogger(__name__)
     
     def _create_embedding(self, text: str) -> torch.Tensor:
-        """Konverter tekst til en indlejringsvektor"""
-        self.logger.info("Opretter indlejring for tekst...")
+        """텍스트를 임베딩 벡터로 변환"""
         try:
-            # Tokenisering
+            # 토크나이징
             completion_request = ChatCompletionRequest(
                 messages=[UserMessage(content=text)]
             )
             tokens = self.tokenizer.encode_chat_completion(completion_request).tokens
             
-            # Gennem indlejringslag
+            # 임베딩 레이어 통과
             with torch.no_grad():
                 token_embeddings = self.model.tok_embeddings(torch.tensor(tokens))
-                # Opret sætningsindlejring med gennemsnitlig pooling
+                # 평균 풀링으로 문장 임베딩 생성
                 sentence_embedding = token_embeddings.mean(dim=0)
             
-            self.logger.info(f"Indlejring oprettet med form: {sentence_embedding.shape}")
             return sentence_embedding
             
         except Exception as e:
-            self.logger.error(f"Fejl under oprettelse af indlejring: {e}", exc_info=True)
-            # Returner en standardværdi
+            self.logger.error(f"Error creating embedding: {e}")
+            # 기본값 반환
             return torch.zeros(self.model.args.dim)
     
     def vectorize_assistant_output(self, assistant_outputs: List[AssistantOutput]) -> List[AssistantOutput]:
-        """Vektorisér assistentoutput"""
-        self.logger.info("Vektoriserer assistentoutput...")
+        """Assistant 출력들을 벡터화"""
         for assistant_output in assistant_outputs:
-            self.logger.info(f"Vektoriserer output for assistent {assistant_output.assistant_id}")
             embedding_vector = self._create_embedding(assistant_output.comment_text)
             assistant_output.embedding_vector = embedding_vector
         
-        self.logger.info(f"Vektoriseret {len(assistant_outputs)} assistentoutput")
+        self.logger.info(f"Vectorized {len(assistant_outputs)} assistant outputs")
         return assistant_outputs
     
     def route_to_experts(self, assistant_outputs: List[AssistantOutput], max_experts: MaxExpertsList) -> torch.Tensor:
-        """Rut indlejret assistentoutput til ekspertsystemet"""
-        self.logger.info("Ruter assistentoutput til eksperter.")
-        # Kombiner alle assistentindlejringer med vægtet gennemsnit
+        """임베딩된 Assistant 출력을 Expert 시스템으로 라우팅"""
+        # 모든 Assistant 임베딩을 가중평균으로 결합
         if not assistant_outputs:
-            self.logger.warning("Ingen assistentoutput at rute. Returnerer en nul-tensor.")
             return torch.zeros(1, 1, self.model.args.dim)
         
         combined_embedding = torch.zeros_like(assistant_outputs[0].embedding_vector)
@@ -261,62 +241,55 @@ class EmbeddingProcessor:
         if total_weight > 0:
             combined_embedding /= total_weight
         
-        self.logger.info(f"Kombineret assistentindlejringer med samlet vægt {total_weight:.4f}")
-        # Tilføj batch-dimension
+        # 배치 차원 추가
         routing_vector = combined_embedding.unsqueeze(0).unsqueeze(0)  # [1, 1, hidden_dim]
         
         return routing_vector
 
 
 class FusionController:
-    """Fusionskontrolsystem"""
+    """Fusion 제어 시스템"""
     
     def __init__(self):
         self.fusion_degrees: Dict[int, float] = {}
         self.logger = logging.getLogger(__name__)
     
     def _calculate_output_similarity(self, first_output: torch.Tensor, second_output: torch.Tensor) -> float:
-        """Beregn lighed mellem to output"""
-        self.logger.info("Beregner outputlighed.")
-        # Beregn cosinus-lighed
+        """두 출력 간의 유사도 계산"""
+        # 코사인 유사도 계산
         first_flat = first_output.reshape(-1)
         second_flat = second_output.reshape(-1)
         
         similarity = F.cosine_similarity(first_flat, second_flat, dim=0)
-        self.logger.info(f"Beregnet cosinus-lighed: {similarity.item():.4f}")
         return similarity.item()
     
     def _calculate_novelty_score(self, first_output: torch.Tensor, second_output: torch.Tensor) -> float:
-        """Beregn nyhedsscore"""
-        self.logger.info("Beregner nyhedsscore.")
-        # Beregn nyhed baseret på L2-afstand
+        """참신성 점수 계산"""
+        # L2 거리 기반 참신성 계산
         l2_distance = torch.norm(first_output - second_output, p=2)
         max_distance = torch.norm(first_output, p=2) + torch.norm(second_output, p=2)
         
         if max_distance == 0:
-            self.logger.warning("Maksimal afstand er nul, kan ikke beregne nyhedsscore.")
             return 0.0
         
         novelty_score = (l2_distance / max_distance).item()
-        self.logger.info(f"Beregnet nyhedsscore: {novelty_score:.4f}")
         return min(1.0, novelty_score)
     
     def calculate_fusion_degree(self, first_output: torch.Tensor, second_output: torch.Tensor, max_experts: MaxExpertsList) -> List[FusionMetrics]:
-        """Beregn fusion_degree ved at sammenligne to output"""
-        self.logger.info("Beregner fusionsgrad for aktive eksperter.")
+        """두 출력 간 비교를 통한 fusion_degree 계산"""
         fusion_metrics = []
         
-        # Beregn samlet outputlighed og nyhed
+        # 전체 출력 간 유사도 및 참신성 계산
         similarity_score = self._calculate_output_similarity(first_output, second_output)
         novelty_score = self._calculate_novelty_score(first_output, second_output)
         
         for expert_output in max_experts.experts:
             expert_id = expert_output.expert_id
             
-            # Hent eksisterende fusion_degree
+            # 기존 fusion_degree 가져오기
             current_fusion_degree = self.fusion_degrees.get(expert_id, 1.0)
             
-            # Dynamisk justeringsformel
+            # 동적 조정 공식
             new_fusion_degree = self._adjust_fusion_degree(
                 current_fusion_degree,
                 similarity_score,
@@ -334,73 +307,68 @@ class FusionController:
             
             fusion_metrics.append(fusion_metric)
             
-            # Gem opdateret fusion_degree
+            # 업데이트된 fusion_degree 저장
             self.fusion_degrees[expert_id] = new_fusion_degree
             expert_output.fusion_degree = new_fusion_degree
-            self.logger.info(f"Ekspert {expert_id}: Gammel fusionsgrad={current_fusion_degree:.4f}, Ny fusionsgrad={new_fusion_degree:.4f}")
         
-        self.logger.info(f"Beregnet fusionsgrader for {len(fusion_metrics)} eksperter")
+        self.logger.info(f"Calculated fusion degrees for {len(fusion_metrics)} experts")
         return fusion_metrics
     
     def _adjust_fusion_degree(self, current_degree: float, similarity: float, novelty: float, activation: float) -> float:
-        """Dynamisk justeringsformel for fusion_degree"""
-        # Høj nyhed + moderat lighed = høj fusion_degree
-        # Lav nyhed + høj lighed = lav fusion_degree
+        """동적 fusion_degree 조정 공식"""
+        # 높은 참신성 + 적당한 유사도 = 높은 fusion_degree
+        # 낮은 참신성 + 높은 유사도 = 낮은 fusion_degree
         
-        novelty_factor = novelty * 0.6  # Nyhedsvægt
-        similarity_factor = (1.0 - similarity) * 0.3  # Forskelvægt
-        activation_factor = activation * 0.1  # Aktiveringsvægt
+        novelty_factor = novelty * 0.6  # 참신성 가중치
+        similarity_factor = (1.0 - similarity) * 0.3  # 차이점 가중치
+        activation_factor = activation * 0.1  # 활성화 가중치
         
         adjustment = novelty_factor + similarity_factor + activation_factor
         
-        # Anvend justering på nuværende grad
+        # 현재 degree에 조정값 적용
         new_degree = current_degree + (adjustment - 0.5) * 0.1
         
-        # Begræns interval (0-1)
+        # 범위 제한 (0-1)
         new_degree = max(0.0, min(1.0, new_degree))
         
         return new_degree
     
     def apply_fusion_weights(self, first_output: torch.Tensor, second_output: torch.Tensor, fusion_metrics: List[FusionMetrics]) -> torch.Tensor:
-        """Generer det endelige output ved at anvende fusionsgrad"""
-        self.logger.info("Anvender fusionsvægte til at generere det endelige output.")
+        """Fusion degree를 적용한 최종 출력 생성"""
         if not fusion_metrics:
-            self.logger.warning("Ingen fusionsmetrikker tilgængelige. Returnerer første output.")
             return first_output
         
-        # Beregn samlet fusionsvægt
+        # 전체 fusion 가중치 계산
         total_fusion_weight = sum(metric.fusion_degree for metric in fusion_metrics)
         
         if total_fusion_weight == 0:
-            self.logger.warning("Samlet fusionsvægt er nul. Returnerer første output.")
             return first_output
         
-        # Beregn normaliserede vægte
-        alpha = total_fusion_weight / len(fusion_metrics)  # gennemsnitlig fusionsgrad
-        beta = 1.0 - alpha  # oprindelig outputindflydelse
+        # 정규화된 가중치 계산
+        alpha = total_fusion_weight / len(fusion_metrics)  # 평균 fusion degree
+        beta = 1.0 - alpha  # 원본 출력 영향도
         
-        # Generer det endelige output
+        # 최종 출력 생성
         fused_output = beta * first_output + alpha * second_output
         
-        self.logger.info(f"Anvendt fusion med alpha={alpha:.3f}, beta={beta:.3f}")
+        self.logger.info(f"Applied fusion with alpha={alpha:.3f}, beta={beta:.3f}")
         return fused_output
 
 
 class SurveySystem:
-    """Undersøgelsessystem"""
+    """설문 조사 시스템"""
     
     def __init__(self, fusion_controller: FusionController):
         self.fusion_controller = fusion_controller
         self.survey_responses: List[SurveyResponse] = []
         self.adjustment_rates = {
-            'positive': 0.05,  # Stigningsrate for positiv feedback
-            'negative': -0.1   # Faldrate for negativ feedback (stærkere)
+            'positive': 0.05,  # 긍정적 피드백 시 증가율
+            'negative': -0.1   # 부정적 피드백 시 감소율 (더 강하게)
         }
         self.logger = logging.getLogger(__name__)
     
     def collect_survey_response(self, question: str, relevance_scores: List[int], user_id: Optional[str] = None) -> SurveyResponse:
-        """Indsaml undersøgelsessvar fra brugeren"""
-        self.logger.info(f"Indsamler undersøgelsessvar for spørgsmål: '{question}'")
+        """사용자로부터 설문 응답 수집"""
         survey_response = SurveyResponse(
             question=question,
             relevance_scores=relevance_scores,
@@ -409,100 +377,88 @@ class SurveySystem:
         )
         
         self.survey_responses.append(survey_response)
-        self.logger.info(f"Indsamlet undersøgelsessvar med scores: {relevance_scores}")
+        self.logger.info(f"Collected survey response with scores: {relevance_scores}")
         
         return survey_response
     
     def update_fusion_degrees(self, recent_responses: List[SurveyResponse]) -> Dict[int, float]:
-        """Opdater fusion_degree baseret på undersøgelsesresultater"""
-        self.logger.info("Opdaterer fusionsgrader baseret på undersøgelsessvar.")
+        """설문 결과를 기반으로 fusion_degree 업데이트"""
         updated_degrees = {}
         
         for response in recent_responses:
             avg_relevance = sum(response.relevance_scores) / len(response.relevance_scores)
-            self.logger.info(f"Gennemsnitlig relevansscore fra svar: {avg_relevance:.2f}")
             
-            # Justering baseret på gennemsnitlig score
-            if avg_relevance >= 4.0:  # Positiv feedback
+            # 평균 점수 기반 조정
+            if avg_relevance >= 4.0:  # 긍정적 피드백
                 adjustment_rate = self.adjustment_rates['positive']
-                self.logger.info(f"Positiv feedback registreret. Anvender justeringsrate: {adjustment_rate}")
-            elif avg_relevance <= 2.0:  # Negativ feedback
+            elif avg_relevance <= 2.0:  # 부정적 피드백
                 adjustment_rate = self.adjustment_rates['negative']
-                self.logger.info(f"Negativ feedback registreret. Anvender justeringsrate: {adjustment_rate}")
-            else:  # Neutral
+            else:  # 중립
                 adjustment_rate = 0.0
-                self.logger.info("Neutral feedback registreret. Ingen justering.")
             
-            # Opdater fusion_degree for alle eksperter
+            # 모든 Expert의 fusion_degree 업데이트
             for expert_id in self.fusion_controller.fusion_degrees:
                 current_degree = self.fusion_controller.fusion_degrees[expert_id]
                 new_degree = max(0.0, min(1.0, current_degree + adjustment_rate))
                 self.fusion_controller.fusion_degrees[expert_id] = new_degree
                 updated_degrees[expert_id] = new_degree
-                self.logger.info(f"Ekspert {expert_id} fusionsgrad opdateret til {new_degree:.4f}")
         
-        self.logger.info(f"Opdateret fusionsgrader baseret på {len(recent_responses)} svar")
+        self.logger.info(f"Updated fusion degrees based on {len(recent_responses)} responses")
         return updated_degrees
 
 
 class DualMoEPipeline:
-    """DualMoE pipeline hovedklasse"""
+    """DualMoE 파이프라인 메인 클래스"""
     
     def __init__(self, model_path: str, tokenizer_path: str):
-        self.logger = logging.getLogger(__name__)
-        self.logger.info("Initialiserer DualMoE Pipeline...")
-        # Indlæs model
+        # 모델 로딩
         self.tokenizer = MistralTokenizer.from_file(tokenizer_path)
         self.model = Transformer.from_folder(model_path)
-        self.logger.info("Model og tokenizer indlæst succesfuldt.")
         
-        # --- Modificeret sektion ---
-        # Opretter ikke længere falske Eksperter og Gate.
-        # Sender den rigtige model til DualOutputMoE controlleren.
+        # --- 수정된 부분 ---
+        # 더 이상 가짜 Expert와 Gate를 만들지 않습니다.
+        # 실제 모델을 DualOutputMoE 컨트롤러에 전달합니다.
         self.experts_system = DualOutputMoE(self.model)
-        # --- Modificering slut ---
+        # --- 수정 끝 ---
+        
+        
         
         self.assistants_system = AssistantRouter(self.tokenizer, self.model)
         self.embedding_processor = EmbeddingProcessor(self.model, self.tokenizer)
         self.fusion_controller = FusionController()
         self.survey_system = SurveySystem(self.fusion_controller)
         
-        self.logger.info("Alle pipeline-komponenter initialiseret.")
+        self.logger = logging.getLogger(__name__)
+        logging.basicConfig(level=logging.INFO)
     
     def process_query(self, user_query: str, enable_survey: bool = False) -> Dict[str, Any]:
-        """Kør hele pipelinen"""
-        self.logger.info(f"Begynder behandling af forespørgsel: {user_query}")
+        """전체 파이프라인 실행"""
+        self.logger.info(f"Processing query: {user_query}")
         
-        # 1. Forbehandling af input (returnerer token-ID'er og sekvenslængder)
-        self.logger.info("Trin 1: Forbehandler brugerforespørgsel.")
+        # 1. 입력 전처리 (토큰 ID와 시퀀스 길이 반환)
         tokens, seqlens = self._preprocess_query(user_query)
+        first_output_embedding, max_experts = self.experts_system.forward_first_pass(tokens, seqlens)
         
-        # 2. Første MoE-pas (input er ændret til token-ID'er)
-        self.logger.info("Trin 2: Udfører første MoE-pas.")
+        # 2. 첫 번째 MoE 패스 (입력이 토큰 ID로 변경됨)
+        # first_output은 이제 모델의 최종 로짓(logits) 또는 임베딩입니다.
         first_output_embedding, max_experts = self.experts_system.forward_first_pass(tokens, seqlens)
         first_output_text = self._decode_output_to_text(first_output_embedding)
-        self.logger.info(f"Første pas afsluttet. Aktive eksperter: {[e.expert_id for e in max_experts.experts]}")
-
-        # 3. Behandling i assistentsystemet
-        self.logger.info("Trin 3: Behandler gennem assistentsystemet.")
+        # 3. Assistant 시스템 처리
         assistant_outputs = self.assistants_system.bridge_through_assistants(
             user_query, 
-            first_output_text,
+            first_output_text, # 수정: 임베딩 대신 텍스트 전달 [cite: 18]
             max_experts
         )
         
-        # 5. Indlejringsbehandling
-        self.logger.info("Trin 5: Forbereder input til andet pas.")
+        # 5. 임베딩 처리
         second_pass_input_embedding = self._prepare_second_pass_input(
             user_query, first_output_text, assistant_outputs
         )
         
-        # 6. Kørsel af andet MoE-pas
-        self.logger.info("Trin 6: Udfører andet MoE-pas.")
+        # 6. 두 번째 MoE 패스 실행
         second_output = self.experts_system.forward_second_pass(second_pass_input_embedding)
-        
-        # 8. Fusionsbehandling (kald til ekstern FusionController)
-        self.logger.info("Trin 8: Beregner og anvender fusionsgrader.")
+        # 8. Fusion 처리 (외부 FusionController 호출)
+        #    더 이상 파이프라인 내부의 간단한 함수를 사용하지 않습니다.
         fusion_metrics = self.fusion_controller.calculate_fusion_degree(
             first_output_embedding, second_output, max_experts
         )
@@ -510,174 +466,162 @@ class DualMoEPipeline:
             first_output_embedding, second_output, fusion_metrics
         )
         
-        # 9. Pakning af resultater
-        self.logger.info("Trin 9: Pakker de endelige resultater.")
+        # 9. 결과 패키징
         result = {
             'user_query': user_query,
             'first_output': first_output_embedding,
             'second_output': second_output,
-            'fused_output': fusion_result,
+            'fused_output': fusion_result.fused_output, # FusionResult 객체에서 최종 출력을 가져옴
             'assistant_outputs': assistant_outputs,
             'fusion_metrics': fusion_metrics,
             'max_experts': max_experts,
             'survey_ready': enable_survey
         }
         
-        self._last_query_result = result # Gem det seneste resultat til reference i undersøgelsen
+        self._last_query_result = result # 나중에 설문에서 참조할 수 있도록 마지막 결과를 저장
         
-        # 10. Undersøgelse (valgfrit)
+        # 10. 설문조사 (옵션)
         if enable_survey:
-            self.logger.info("Trin 10: Undersøgelsestilstand aktiveret. Forbereder indsamling af feedback.")
-            # SurveySystem kræver tekstoutput, så dekod de endelige resultater.
+            # SurveySystem은 텍스트 출력을 필요로 하므로, 최종 결과들을 디코딩합니다.
             first_text = self._decode_output_to_text(result['first_output'])
             second_text = self._decode_output_to_text(result['second_output'])
             fused_text = self._decode_output_to_text(result['fused_output'])
             
-            # Kald SurveySystems grænseflade til indsamling af undersøgelser.
-            # Dette er kun en demonstration; i en rigtig app ville du indsamle dette fra en bruger.
-            self.logger.info("Simulerer indsamling af undersøgelsessvar (manuel indsendelse kræves).")
+            # SurveySystem의 설문 수집 인터페이스를 호출합니다.
+            self.survey_system.collect_survey_response(
+                question=user_query,
+                outputs={
+                    'first': first_text,
+                    'second': second_text,
+                    'fused': fused_text,
+                },
+                # auto_mode=True로 설정하면 테스트 시 자동으로 점수를 매깁니다.
+                # 사용자에게 직접 입력을 받으려면 False로 두거나 생략합니다.
+                auto_mode=False 
+            )
 
-        self.logger.info("Pipelinebehandling afsluttet.")
+        self.logger.info("Pipeline processing completed")
         return result
     
     
     def _prepare_second_pass_input(self, user_query: str, first_output_text: str, assistant_outputs: List[Any]) -> torch.Tensor:
         """
-        Forbered input-tensoren til det andet pas baseret på assistentens kommentarer.
-        Generer en 'sekvensindlejring' af tokens i stedet for en enkelt 'konceptvektor'.
+        Assistant의 코멘트를 바탕으로 두 번째 패스의 입력 텐서를 준비합니다.
+        하나의 '개념 벡터'가 아닌, 토큰 '시퀀스 임베딩'을 생성합니다.
         """
-        self.logger.info("Forbereder input til det andet pas baseret på assistentkommentarer...")
+        self.logger.info("Preparing input for the second pass based on assistant comments...")
 
-        # 1. Kombiner assistentkommentarer til en enkelt tekst
+        # 1. Assistant 코멘트들을 하나의 텍스트로 결합
         assistant_comments = "\n".join([f"- {out.comment_text}" for out in assistant_outputs])
-        self.logger.info(f"Kombinerede assistentkommentarer: \n{assistant_comments}")
 
-        # 2. Sammensæt en ny prompt til den anden inferens
+        # 2. 두 번째 추론을 위한 새로운 프롬프트 구성
         second_pass_prompt = f"""
-## Oprindeligt spørgsmål
+## 원본 질문
 {user_query}
 
-## Første svar
+## 1차 답변
 {first_output_text}
 
-## Ekspertkommentarer (nye perspektiver)
+## 전문가 코멘트 (새로운 관점)
 {assistant_comments}
 
-## Omfattende gennemgang og endeligt svar
+## 종합적 재검토 및 최종 답변
 """
-        self.logger.info("Sammensat prompt til andet pas.")
 
-        # 3. Tokeniser prompten
+        # 3. 프롬프트를 토큰화
+        # mistral-inference의 토크나이저를 사용하여 인코딩합니다.
         completion_request = ChatCompletionRequest(
             messages=[UserMessage(content=second_pass_prompt)]
         )
         tokens = self.tokenizer.encode_chat_completion(completion_request).tokens
-        token_tensor = torch.tensor(tokens, dtype=torch.long).unsqueeze(0) # [1, seq_len] form
-        self.logger.info(f"Tokeniseret prompt til andet pas til {token_tensor.shape[1]} tokens.")
+        token_tensor = torch.tensor(tokens, dtype=torch.long).unsqueeze(0) # [1, seq_len] 형태
 
-        # 4. Konverter token-sekvens til indlejringssekvens
+        # 4. 토큰 시퀀스를 임베딩 시퀀스로 변환
+        # 모델의 임베딩 레이어를 직접 사용합니다.
         with torch.no_grad():
+            # Transformer 모델의 embed_tokens 메서드를 사용해야 합니다.
+            # 이 부분이 모델 구조에 따라 다를 수 있으니 확인이 필요합니다.
+            # 예시: self.model.tok_embeddings(token_tensor) 또는 self.model.embed_tokens(token_tensor)
             input_embedding = self.model.tok_embeddings(token_tensor) # [1, seq_len, hidden_dim]
 
-        self.logger.info(f"Input til andet pas forberedt med form: {input_embedding.shape}")
+        self.logger.info(f"Second pass input prepared with shape: {input_embedding.shape}")
         return input_embedding
     
     def submit_survey(self, relevance_scores: List[int], user_id: Optional[str] = None) -> Dict[int, float]:
         """
-        (Denne funktion kan bruges til manuelt at indsende undersøgelsesscores udefra.)
-        Indsend undersøgelse og opdater fusion_degree
+        (이 함수는 외부에서 수동으로 설문 점수를 제출할 때 사용될 수 있습니다.)
+        설문 제출 및 fusion_degree 업데이트
         """
-        self.logger.info(f"Indsender manuel undersøgelse med scores: {relevance_scores}")
         if not hasattr(self, '_last_query_result'):
-            self.logger.error("Forsøgte at indsende undersøgelse, men ingen seneste forespørgsel fundet.")
-            raise ValueError("Ingen seneste forespørgsel at evaluere.")
+            raise ValueError("평가할 최근 쿼리가 없습니다.")
         
         last_query = self._last_query_result['user_query']
         
-        # Kald SurveySystems svarindsamlings- og opdateringslogik direkte
+        # SurveySystem의 응답 수집 및 업데이트 로직을 직접 호출할 수도 있습니다.
         survey_response = self.survey_system.collect_survey_response(
             question=last_query,
             relevance_scores=relevance_scores,
             user_id=user_id
         )
         
-        # Opdater fusion_degree baseret på undersøgelsesresultaterne
+        # 설문 결과를 기반으로 fusion_degree 업데이트
         updated_degrees = self.survey_system.update_fusion_degrees([survey_response])
-        self.logger.info(f"Fusionsgrader opdateret via manuel undersøgelsesindsendelse: {updated_degrees}")
         
         return updated_degrees
     
     def _decode_output_to_text(self, output_embedding: torch.Tensor) -> str:
-        """Dekoder modellens endelige outputindlejring til tekst."""
-        self.logger.info("Dekoder outputindlejring til tekst.")
-        # Konverter modellens outputindlejring til scores (logits) over ordforrådet
-        logits = F.linear(output_embedding, self.model.tok_embeddings.weight) # [batch, seq_len, vocab_size]
-        # Vælg token-ID'erne med de højeste scores
-        next_token_ids = torch.argmax(logits, dim=-1) # [batch, seq_len]
+        """모델의 최종 출력 임베딩을 텍스트로 디코딩합니다.""" [cite: 8]
+        # 모델의 출력 임베딩을 단어 사전에 대한 점수(logits)로 변환
+        logits = F.linear(output_embedding, self.model.tok_embeddings.weight) # [batch, seq_len, vocab_size] [cite: 9]
+        # 가장 높은 점수를 가진 토큰 ID를 선택
+        next_token_ids = torch.argmax(logits, dim=-1) # [batch, seq_len] [cite: 10]
 
-        # Dekod kun det første resultat i batchen
-        decoded_text = self.tokenizer.decode(next_token_ids[0].tolist())
-        self.logger.info("Dekodning afsluttet.")
+        # 배치 중 첫 번째 결과만 디코딩
+        decoded_text = self.tokenizer.decode(next_token_ids[0].tolist()) [cite: 10]
         return decoded_text
 
     def _preprocess_query(self, query: str) -> Tuple[torch.Tensor, List[int]]:
-        """Forbehandler forespørgsel til token-ID'er og sekvenslængder."""
-        self.logger.info("Forbehandler forespørgsel til token-ID'er.")
+        """쿼리를 토큰 ID와 시퀀스 길이로 전처리합니다."""
         completion_request = ChatCompletionRequest(
             messages=[UserMessage(content=query)]
         )
         tokens = self.tokenizer.encode_chat_completion(completion_request).tokens
         
-        # seqlens er en liste over længderne af hver sekvens til batchbehandling.
-        # Her er batchen 1, så det er den samlede token-længde.
+        # seqlens는 배치 처리를 위한 각 시퀀스의 길이를 담은 리스트입니다.
+        # 여기서는 배치가 1이므로, 전체 토큰 길이가 됩니다.
         seqlens = [len(tokens)]
-        self.logger.info(f"Forespørgsel forbehandlet til {seqlens[0]} tokens.")
         
         return torch.tensor(tokens, dtype=torch.long), seqlens
 
 
-# Eksempel på brug
+# 사용 예시
 if __name__ == "__main__":
-    # Opsæt modelstier
-    # BEMÆRK: Opdater disse stier, så de peger på din faktiske model og tokenizer-mappe.
-    model_path = "C:\\Users\\jungh\\Desktop\\fuck\\mistral-inference-main\\model"  # Skift til den faktiske modelsti
-    tokenizer_path = "C:\\Users\\jungh\\Desktop\\fuck\\mistral-inference-main\\model\\tokenizer.model"  # Skift til den faktiske tokenizer-sti
-    
-    logger = logging.getLogger()
+    # 모델 경로 설정
+    model_path = "C:\\Users\\jungh\\Desktop\\fuck\\mistral-inference-main\\model"  # 실제 모델 경로로 변경
+    # model 폴더에 있는 실제 토크나이저 파일(예: tokenizer.model 또는 tekken.json)로 경로를 수정해야 합니다.
+    tokenizer_path = "C:\\Users\\jungh\\Desktop\\fuck\\mistral-inference-main\\model\\tokenizer.model"  # 실제 토크나이저 경로로 변경
     
     try:
-        # Initialiser pipeline
+        # 파이프라인 초기화
         pipeline = DualMoEPipeline(model_path, tokenizer_path)
         
-        # Behandl forespørgsel
-        user_query = "recommend a report topic about ai"
+        # 쿼리 처리
+        user_query = "recommend the report topic about ai"
         result = pipeline.process_query(user_query, enable_survey=True)
         
-        # Udskriv resultater
-        logger.info("\n--- PIPELINE-RESULTATER ---")
-        logger.info(f"Forespørgsel: {result['user_query']}")
-        logger.info(f"Aktive eksperter: {[expert.expert_id for expert in result['max_experts'].experts]}")
-        logger.info(f"Antal assistentkommentarer: {len(result['assistant_outputs'])}")
+        # 결과 출력
+        print(f"Query: {result['user_query']}")
+        print(f"Active Experts: {len(result['max_experts'].experts)}")
+        print(f"Assistant Comments: {len(result['assistant_outputs'])}")
         
-        for i, assistant_output in enumerate(result['assistant_outputs']):
-            logger.info(f"--- Assistentkommentar {i+1} ---")
-            logger.info(assistant_output.comment_text)
+        for assistant_output in result['assistant_outputs']:
+            print(f"- {assistant_output.comment_text}")
         
-        logger.info("\n--- Fusionsmetrikker ---")
-        for metric in result['fusion_metrics']:
-            logger.info(f"Ekspert {metric.expert_id}: Lighed={metric.similarity_score:.4f}, Nyhed={metric.novelty_score:.4f}, Fusionsgrad={metric.fusion_degree:.4f}")
-
-        # Eksempel på indsendelse af undersøgelse
-        logger.info("\n--- SIMULERER INDSENDELSE AF UNDERSØGELSE ---")
-        # I en rigtig app ville disse scores komme fra brugerinput.
-        relevance_scores = [4, 5, 3, 4, 5]  # 1-5 point
-        logger.info(f"Indsender manuelle relevansscores: {relevance_scores}")
+        # 설문 제출 예시
+        relevance_scores = [4, 5, 3, 4, 5]  # 1-5 점수
         updated_degrees = pipeline.submit_survey(relevance_scores)
-        logger.info(f"Opdaterede fusionsgrader efter undersøgelse: {updated_degrees}")
+        print(f"Updated fusion degrees: {updated_degrees}")
         
-    except FileNotFoundError as e:
-        logger.error(f"Fejl: Model- eller tokenizer-fil ikke fundet. Sørg for, at stierne er korrekte.")
-        logger.error(f"Detaljer: {e}")
     except Exception as e:
-        logger.error(f"Der opstod en uventet fejl under pipeline-kørsel: {e}", exc_info=True)
-        logger.error("Sørg for, at mistral-inference er installeret ('pip install mistral-inference'), og at modelstierne er korrekte.")
+        print(f"Error: {e}")
+        print("Please ensure mistral-inference is installed and model paths are correct")

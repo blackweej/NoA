@@ -12,15 +12,6 @@ from typing import List, Dict, Optional, Tuple
 import numpy as np
 import json
 import os
-import logging
-
-# 로거 설정
-logger = logging.getLogger(__name__)
-logger.setLevel(logging.INFO)
-handler = logging.StreamHandler()
-formatter = logging.Formatter('%(asctime)s - %(name)s - %(levelname)s - %(message)s')
-handler.setFormatter(formatter)
-logger.addHandler(handler)
 
 
 class FusionMetrics:
@@ -99,7 +90,6 @@ class FusionController:
         
         # 기존 데이터 로드
         self._load_fusion_degrees()
-        logger.info("FusionController initialized.")
 
     def calculate_fusion_degree(self, first_output: torch.Tensor, second_output: torch.Tensor, 
                               max_experts) -> List[FusionMetrics]:
@@ -114,10 +104,7 @@ class FusionController:
         Returns:
             fusion_metrics: List[FusionMetrics]
         """
-        start_time = datetime.now()
         fusion_metrics = []
-        
-        logger.debug("Starting fusion degree calculation.")
         
         # 전체 출력 차이 계산
         output_diff = self._calculate_global_output_difference(first_output, second_output)
@@ -162,14 +149,9 @@ class FusionController:
             
             # 7. 새로운 fusion_degree 저장
             self.fusion_degrees[expert_id] = new_fusion_degree
-            logger.debug(f"Expert {expert_id}: Sim={similarity_score:.4f}, Nov={novelty_score:.4f}, New Fusion Degree={new_fusion_degree:.4f}")
         
         # 8. 통계 업데이트
         self._update_statistics(fusion_metrics)
-        
-        end_time = datetime.now()
-        logger.info(f"Fusion degree calculation completed for {len(max_experts.experts)} experts in {(end_time - start_time).total_seconds():.4f} seconds.")
-        logger.debug(f"Current average fusion degree: {self.get_fusion_statistics()['avg_fusion_degree']:.4f}")
         
         return fusion_metrics
 
@@ -187,25 +169,20 @@ class FusionController:
             fusion_result: FusionResult 객체
         """
         start_time = datetime.now()
-        logger.debug("Applying fusion weights to generate final output.")
         
         # 1. Expert별 가중치 정규화
         fusion_weights = self._normalize_fusion_weights(fusion_metrics)
-        logger.debug(f"Normalized fusion weights: {fusion_weights}")
         
         # 2. 전체 fusion 강도 계산
         total_fusion_strength = sum(fusion_weights.values())
-        logger.debug(f"Total fusion strength: {total_fusion_strength:.4f}")
         
         # 3. 안전 장치: 모든 fusion_degree가 너무 낮은 경우
         if total_fusion_strength < self.config['min_fusion_degree']:
-            logger.warning(f"Total fusion strength ({total_fusion_strength:.4f}) is below min_fusion_degree ({self.config['min_fusion_degree']}). Returning first_output directly.")
             return FusionResult(first_output, {}, fusion_metrics)
         
         # 4. 적응적 가중치 계산
         alpha = self._calculate_adaptive_alpha(total_fusion_strength, fusion_metrics)
         beta = 1.0 - alpha
-        logger.debug(f"Adaptive alpha (second_output weight): {alpha:.4f}, Beta (first_output weight): {beta:.4f}")
         
         # 5. 공간별 가중 조합 (attention 기반)
         fused_output = self._spatial_weighted_fusion(
@@ -215,31 +192,36 @@ class FusionController:
         # 6. 결과 패키징
         fusion_result = FusionResult(fused_output, fusion_weights, fusion_metrics)
         fusion_result.processing_time = (datetime.now() - start_time).total_seconds()
-        logger.info(f"Fusion application completed in {fusion_result.processing_time:.4f} seconds.")
         
         return fusion_result
 
     def _calculate_global_output_difference(self, first_output: torch.Tensor, 
                                           second_output: torch.Tensor) -> torch.Tensor:
         """전체 출력 차이의 공간적 분포 계산"""
-        diff = torch.norm(first_output - second_output, p=2, dim=-1)
+        # L2 거리 기반 차이 계산
+        diff = torch.norm(first_output - second_output, p=2, dim=-1)  # [batch_size, seq_len]
+        
+        # 정규화
         diff_normalized = diff / (torch.max(diff) + 1e-8)
-        logger.debug(f"Calculated global output difference. Max diff: {torch.max(diff).item():.4f}")
+        
         return diff_normalized
 
     def _calculate_output_similarity(self, first_output: torch.Tensor, second_output: torch.Tensor, 
                                    expert_output) -> float:
         """두 출력 간의 유사도 계산"""
+        # 1. 코사인 유사도 계산
         first_flat = first_output.flatten()
         second_flat = second_output.flatten()
         
         cosine_sim = F.cosine_similarity(first_flat.unsqueeze(0), second_flat.unsqueeze(0))
         
+        # 2. Expert 활성화 영역에서의 유사도 가중치 적용
         activation_weight = expert_output.weight
         weighted_similarity = cosine_sim * activation_weight
         
+        # 3. 정규화 (0-1 범위)
         similarity_score = torch.clamp(weighted_similarity, 0.0, 1.0).item()
-        logger.debug(f"Expert {expert_output.expert_id}: Cosine Sim={cosine_sim.item():.4f}, Activation Weight={activation_weight:.4f}, Weighted Sim={similarity_score:.4f}")
+        
         return similarity_score
 
     def _calculate_novelty_score(self, first_output: torch.Tensor, second_output: torch.Tensor, 
@@ -247,13 +229,17 @@ class FusionController:
         """참신성 점수 계산"""
         expert_id = expert_output.expert_id
         
+        # 1. 출력 차이 기반 참신성
         diff_magnitude = torch.mean(output_diff).item()
         
+        # 2. Expert의 과거 성능 기록 고려
         historical_performance = self.performance_history.get(expert_id, [0.5])
         avg_historical = np.mean(historical_performance)
         
+        # 3. 활성화 패턴 기반 참신성
         activation_novelty = self._calculate_activation_novelty(expert_output)
         
+        # 4. 종합 참신성 점수
         novelty_components = {
             'diff_magnitude': diff_magnitude * 0.4,
             'historical_deviation': abs(diff_magnitude - avg_historical) * 0.3,
@@ -261,25 +247,27 @@ class FusionController:
         }
         
         novelty_score = sum(novelty_components.values())
+        
+        # 5. 정규화 (0-1 범위)
         novelty_score = np.clip(novelty_score, 0.0, 1.0)
-        logger.debug(f"Expert {expert_id}: Diff Mag={diff_magnitude:.4f}, Avg Hist={avg_historical:.4f}, Act Novelty={activation_novelty:.4f}, Total Novelty={novelty_score:.4f}")
         
         return float(novelty_score)
 
     def _calculate_activation_novelty(self, expert_output) -> float:
         """Expert 활성화 패턴의 참신성 계산"""
+        # 현재 활성화 점수와 과거 평균 비교
         current_activation = expert_output.activation_score
         expert_id = expert_output.expert_id
         
+        # 과거 활성화 점수 기록이 있는 경우
         if expert_id in self.performance_history:
             historical_activations = self.performance_history[expert_id]
             if len(historical_activations) > 0:
                 avg_historical_activation = np.mean(historical_activations)
                 activation_novelty = abs(current_activation - avg_historical_activation)
-                logger.debug(f"Expert {expert_id}: Current Act={current_activation:.4f}, Avg Hist Act={avg_historical_activation:.4f}, Act Novelty={activation_novelty:.4f}")
                 return min(activation_novelty, 1.0)
         
-        logger.debug(f"Expert {expert_id}: No historical activations, returning default activation novelty (0.5).")
+        # 기본값 반환
         return 0.5
 
     def _adjust_fusion_degree(self, current_degree: float, similarity: float, 
@@ -292,74 +280,85 @@ class FusionController:
         - 낮은 참신성 + 높은 유사도 = 낮은 fusion_degree
         - 활성화 점수도 고려
         """
-        novelty_factor = novelty * 0.5
-        similarity_factor = (1.0 - similarity) * 0.3
-        activation_factor = activation * 0.2
+        # 1. 기본 조정 인자들
+        novelty_factor = novelty * 0.5  # 참신성 가중치
+        similarity_factor = (1.0 - similarity) * 0.3  # 차이점 가중치 (유사도가 낮을수록 높은 가중치)
+        activation_factor = activation * 0.2  # 활성화 가중치
         
+        # 2. 종합 조정 점수
         adjustment_score = novelty_factor + similarity_factor + activation_factor
         
+        # 3. 조정 방향 결정
         target_adjustment = (adjustment_score - 0.5) * self.config['adjustment_rate']
         
+        # 4. 점진적 조정 (급격한 변화 방지)
         adjustment_with_inertia = target_adjustment * 0.7 + (current_degree - 0.5) * 0.3
         
+        # 5. 새로운 degree 계산
         new_degree = current_degree + adjustment_with_inertia
         
+        # 6. 범위 제한
         new_degree = np.clip(new_degree, 
                            self.config['min_fusion_degree'], 
                            self.config['max_fusion_degree'])
-        logger.debug(f"Adjusting fusion degree: Current={current_degree:.4f}, Sim={similarity:.4f}, Nov={novelty:.4f}, Act={activation:.4f}, New={new_degree:.4f}")
         
         return float(new_degree)
 
     def _normalize_fusion_weights(self, fusion_metrics: List[FusionMetrics]) -> Dict[int, float]:
         """Fusion weights 정규화"""
         fusion_weights = {}
+        
+        # 1. 기본 가중치 계산
         total_weight = 0.0
         for metric in fusion_metrics:
             weight = metric.fusion_degree * metric.activation_weight
             fusion_weights[metric.expert_id] = weight
             total_weight += weight
         
+        # 2. 정규화
         if total_weight > 0:
             for expert_id in fusion_weights:
                 fusion_weights[expert_id] /= total_weight
-        logger.debug(f"Normalized fusion weights. Total pre-normalization weight: {total_weight:.4f}")
         
         return fusion_weights
 
     def _calculate_adaptive_alpha(self, total_fusion_strength: float, 
                                 fusion_metrics: List[FusionMetrics]) -> float:
         """적응적 alpha 값 계산 (Assistant 출력의 영향도)"""
+        # 1. 기본 alpha는 전체 fusion 강도에 비례
         base_alpha = min(total_fusion_strength, 0.8)
         
-        avg_novelty = np.mean([m.novelty_score for m in fusion_metrics]) if fusion_metrics else 0.0
+        # 2. 참신성 점수 기반 조정
+        avg_novelty = np.mean([m.novelty_score for m in fusion_metrics])
         novelty_boost = avg_novelty * 0.2
         
+        # 3. 최종 alpha 계산
         alpha = base_alpha + novelty_boost
         alpha = np.clip(alpha, 0.1, 0.9)
-        logger.debug(f"Calculated adaptive alpha: Base={base_alpha:.4f}, Avg Novelty={avg_novelty:.4f}, Novelty Boost={novelty_boost:.4f}, Final Alpha={alpha:.4f}")
         
         return float(alpha)
 
     def _spatial_weighted_fusion(self, first_output: torch.Tensor, second_output: torch.Tensor,
                                fusion_weights: Dict[int, float], alpha: float, beta: float) -> torch.Tensor:
         """공간별 가중 조합을 통한 융합"""
+        # 1. 기본 가중 조합
         basic_fusion = beta * first_output + alpha * second_output
-        logger.debug(f"Performing basic fusion with alpha={alpha:.4f} and beta={beta:.4f}.")
         
+        # 2. Expert별 가중치를 활용한 공간적 조정
         if len(fusion_weights) > 0:
+            # 각 위치별로 다른 가중치 적용 (simplified spatial weighting)
             spatial_weights = torch.ones_like(first_output) * beta
             
+            # 높은 fusion weight를 가진 Expert들이 영향을 미치는 영역에서 alpha 증가
             max_weight = max(fusion_weights.values()) if fusion_weights else 0.0
             if max_weight > 0:
                 spatial_alpha = alpha * (1.0 + max_weight * 0.5)
                 spatial_weights = spatial_weights * (1.0 - spatial_alpha) + spatial_alpha
-                logger.debug(f"Applying spatial weighting with max expert weight {max_weight:.4f} and spatial alpha {spatial_alpha:.4f}.")
             
+            # 공간별 가중 적용
             fused_output = spatial_weights * first_output + (1.0 - spatial_weights) * second_output
         else:
             fused_output = basic_fusion
-            logger.debug("No fusion weights found, returning basic fusion.")
         
         return fused_output
 
@@ -367,14 +366,12 @@ class FusionController:
         """Expert의 성능 기록 업데이트"""
         if expert_id not in self.performance_history:
             self.performance_history[expert_id] = []
-            logger.debug(f"Initialized performance history for expert {expert_id}.")
         
         self.performance_history[expert_id].append(novelty_score)
         
+        # 기록 길이 제한
         if len(self.performance_history[expert_id]) > self.config['history_length']:
-            popped_score = self.performance_history[expert_id].pop(0)
-            logger.debug(f"Expert {expert_id} performance history trimmed. Popped: {popped_score:.4f}.")
-        logger.debug(f"Expert {expert_id} performance history updated with novelty score {novelty_score:.4f}. Current length: {len(self.performance_history[expert_id])}")
+            self.performance_history[expert_id].pop(0)
 
     def _update_statistics(self, fusion_metrics: List[FusionMetrics]):
         """통계 정보 업데이트"""
@@ -384,6 +381,7 @@ class FusionController:
             avg_similarity = np.mean([m.similarity_score for m in fusion_metrics])
             avg_novelty = np.mean([m.novelty_score for m in fusion_metrics])
             
+            # 이동 평균 업데이트
             decay = self.config['decay_factor']
             self.stats['avg_similarity_score'] = (
                 self.stats['avg_similarity_score'] * decay + avg_similarity * (1 - decay)
@@ -391,7 +389,6 @@ class FusionController:
             self.stats['avg_novelty_score'] = (
                 self.stats['avg_novelty_score'] * decay + avg_novelty * (1 - decay)
             )
-            logger.debug(f"Statistics updated. Total calculations: {self.stats['total_calculations']}, Avg Sim: {self.stats['avg_similarity_score']:.4f}, Avg Nov: {self.stats['avg_novelty_score']:.4f}")
 
     def _load_fusion_degrees(self):
         """저장된 fusion degree 로드"""
@@ -401,11 +398,9 @@ class FusionController:
                     data = json.load(f)
                     self.fusion_degrees = {int(k): v for k, v in data.get('fusion_degrees', {}).items()}
                     self.performance_history = {int(k): v for k, v in data.get('performance_history', {}).items()}
-                    logger.info(f"Loaded {len(self.fusion_degrees)} fusion degrees from {self.save_path}")
-            else:
-                logger.info(f"No existing fusion degrees file found at {self.save_path}.")
+                    print(f"Loaded {len(self.fusion_degrees)} fusion degrees from {self.save_path}")
         except Exception as e:
-            logger.error(f"Error loading fusion degrees from {self.save_path}: {e}")
+            print(f"Error loading fusion degrees: {e}")
 
     def save_fusion_degrees(self):
         """현재 fusion degree 저장"""
@@ -419,13 +414,13 @@ class FusionController:
             }
             with open(self.save_path, 'w') as f:
                 json.dump(data, f, indent=2)
-            logger.info(f"Saved fusion degrees to {self.save_path}")
+            print(f"Saved fusion degrees to {self.save_path}")
         except Exception as e:
-            logger.error(f"Error saving fusion degrees to {self.save_path}: {e}")
+            print(f"Error saving fusion degrees: {e}")
 
     def get_fusion_statistics(self) -> Dict:
         """현재 fusion 통계 반환"""
-        stats = {
+        return {
             'total_experts': len(self.fusion_degrees),
             'avg_fusion_degree': np.mean(list(self.fusion_degrees.values())) if self.fusion_degrees else 0.0,
             'min_fusion_degree': min(self.fusion_degrees.values()) if self.fusion_degrees else 0.0,
@@ -435,8 +430,6 @@ class FusionController:
             'avg_novelty_score': self.stats['avg_novelty_score'],
             'experts_with_history': len(self.performance_history)
         }
-        logger.debug(f"Retrieved fusion statistics: {stats}")
-        return stats
 
     def reset_fusion_degrees(self):
         """모든 fusion degree 초기화"""
@@ -448,12 +441,11 @@ class FusionController:
             'avg_novelty_score': 0.0,
             'fusion_adjustments': 0
         }
-        logger.info("All fusion degrees and historical performance reset to default values.")
+        print("All fusion degrees reset to default values")
 
     def __del__(self):
         """소멸자에서 자동 저장"""
         try:
             self.save_fusion_degrees()
-            logger.info("Fusion degrees automatically saved on object destruction.")
-        except Exception as e:
-            logger.error(f"Error during automatic save on destruction: {e}")
+        except:
+            pass
